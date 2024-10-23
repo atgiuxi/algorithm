@@ -1,0 +1,6 @@
+{
+  "files.associations": {
+    "*.cpp": "code-text-binary",
+    "iostream": "cpp"
+  }
+}
