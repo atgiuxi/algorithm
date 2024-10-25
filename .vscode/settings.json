@@ -1,6 +1,9 @@
 {
   "files.associations": {
     "*.cpp": "code-text-binary",
-    "iostream": "cpp"
+    "iostream": "cpp",
+    "vector": "cpp",
+    "deque": "cpp",
+    "string": "cpp"
   }
 }
