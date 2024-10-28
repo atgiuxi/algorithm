@@ -12,4 +12,5 @@ typedef struct Node
 
 
 void PushBack(Node** ppHead,int data);
+void PopBack(Node** ppHead);
 void Print(Node* phead);

@@ -33,6 +33,8 @@ void test2()
     PushBack(&pHead,2);
     PushBack(&pHead,3);
 
+    PopBack(&pHead);
+
     Print(pHead);
 }
 
@@ -79,9 +81,10 @@ void test5()
     int (*ptr)[10] = &arr; 
 }
 
+
 int main()
 {
-    test4();
+    test2();
 
     return 0;
 }

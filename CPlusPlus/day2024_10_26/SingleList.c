@@ -38,6 +38,25 @@ void PushBack(Node** ppHead,int data)
     }
 }
 
+void PopBack(Node** ppHead)
+{
+    if(*ppHead == NULL) return;
+
+    
+    Node* tail = *ppHead;
+
+    if(tail->next == NULL)
+    {
+        tail->next = NULL;
+    }
+    while (tail->next->next != NULL)
+    {
+        tail = tail->next;
+    }
+
+    tail->next->next = NULL; 
+}
+
 void Print(Node* phead)
 {
     while(phead != NULL)
