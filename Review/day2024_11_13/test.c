@@ -2,6 +2,7 @@
 #include <assert.h>
 #include <string.h>
 #include <math.h>
+#include "test.h"
 
 void show_array(int* arr,int size)
 {
@@ -384,6 +385,3 @@ int main(int argc,char* argv[])
     
     return 0;
 }
-
-
-
