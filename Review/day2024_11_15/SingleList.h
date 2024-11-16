@@ -21,3 +21,4 @@ void PopFront(Node** pphead);
 Node* Find(Node* phead,DataType data);
 
 void Insert(Node** pphead,Node* pos,DataType data);
+void Erase(Node** pphead,Node* pos);

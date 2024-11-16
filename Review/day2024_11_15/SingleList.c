@@ -62,8 +62,9 @@ void PushFront(Node** pphead,DataType data)
 void PopBack(Node** pphead)
 {
 	assert(pphead);
-	assert(*pphead != NULL);
+	assert(*pphead != NULL); // 链表为NULL,那就不能删了
 
+	// 尾删的时候是找到为尾部的前一个,让perv->next = NULL.所以只有一个结点的时候单独处理.
 	if((*pphead)->next == NULL)
 	{
 		free(*pphead);
@@ -105,7 +106,36 @@ Node* Find(Node* phead,DataType data)
 void Insert(Node** pphead,Node* pos,DataType data)
 {
 	assert(pphead);
-	assert(*pphead);
-	Node* newNode = BuyNode(data);
+	assert(pos);
 
+	if(pos == *pphead){PushFront(pphead,data);}
+	else
+	{
+		Node* prev = *pphead;
+		// 一般来说: Insert接口是配合Find接口使用的,传入进来的pos要么是pos要么是链表中的结点
+		// 如果pos不是链表中的元素,查找的时候就会出错.
+		while(prev->next != pos){ prev = prev->next; }
+
+		Node* newNode = BuyNode(data);
+		prev->next = newNode;
+		newNode->next = pos;
+	}
+}
+
+void Erase(Node** pphead,Node* pos /*删除pos位置*/)
+{
+	assert(*pphead != NULL);
+	assert(pos);
+
+	if(*pphead == pos){PopFront(pphead);}
+	else
+	{
+		Node* prev = *pphead;
+		// 一般来说: Erase接口也是配合Find接口使用的,传入进来的pos要么是pos要么是链表中的结点
+		while(prev->next != pos){ prev = prev->next; }
+
+		prev->next = pos->next;
+		free(pos);
+		pos = NULL;
+	}
 }
