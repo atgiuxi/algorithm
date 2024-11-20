@@ -18,9 +18,27 @@ namespace xiYan
 	};
 
 	template<class T>
+	struct __list__iterator
+	{
+		typedef LinkedListNode<T> Node;
+		typedef __list__iterator<T> Self;
+		Node* _node;
+		__list__iterator(Node* node) :_node(node){}
+
+		bool operator !=(Self it) {return _node != it._node;}
+		T* operator->() {&_node->_data;}
+		Self& operator--()
+		{
+			_node = _node->_prev;
+			return *this;
+		}
+	};
+
+	template<class T>
 	class list
 	{
 		typedef LinkedListNode<T> Node;		
+		typedef __list__iterator<T> iterator;
 	private:	
 		Node* _head;
 		int _size;
@@ -35,43 +53,42 @@ namespace xiYan
 			_head->_prev = _head;
 		}
 	public:
-		// 1.在pos位置之前插入
-		void insert(Node* pos,const T& data)
+		iterator begin() {return iterator(_head->_next);}
+		iterator end() {return iterator(_head);}
+
+		iterator insert(iterator pos,const T& data)
 		{
 			Node* node = new Node(data);
-			Node* prev = pos->_prev;
+			Node* prev = pos._node->_prev;
 
-			node->_next = pos;
+			node->_next = pos._node;
 			node->_prev = prev;
 			prev->_next = node;
-			pos->_prev = node;
+			pos._node->_prev = node;
+
 
 			_size++;
+			return iterator(node);
 		}
 
-		void erase(Node* pos)
+		iterator erase(iterator pos)
 		{
-			assert(pos != _head);
+			assert(pos._node != _head);
 		
-			Node* perv = pos->_prev;
-			Node* next = pos->_next;
+			Node* perv = pos._node->_prev;
+			Node* next = pos._node->_next;
 
 			perv->_next = next;
 			next->_prev = perv;
 
-			delete pos;
+			delete pos._node;
 			_size--;
+			return iterator(next);
 		}
 
-		void push_back(const T& data)
-		{
-			insert(_head,data);
-		}
+		void push_back(const T& data){ insert(begin(),data);}
 
-		void pop_back()
-		{
-			erase(_head->_prev);
-		}
+		void pop_back(){ erase(--end()); }
 
 		void print()
 		{
@@ -84,5 +101,4 @@ namespace xiYan
 			std::cout << std::endl;
 		}
 	};
-
 }
