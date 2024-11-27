@@ -142,6 +142,10 @@ int main()
 	int m = 5;
 	scanf("%d",&m);	
 	Node* head = create(n);
+
+	
+
+
 	while(head->next != head)
 	{
 		int len = n;
