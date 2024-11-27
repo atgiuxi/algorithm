@@ -4,6 +4,8 @@
 #include <string>
 #include <stdlib.h>
 #include <string.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
 
 #define INF 0
 #define DBG 1
@@ -19,6 +21,7 @@
 	}while(0)					
 
 #define DBG_LOG(fmt,...) LOG(DBG,fmt,##__VA_ARGS__)
+#define ERR_LOG(fmt,...) LOG(ERR,fmt,##__VA_ARGS__)
 
 #define BUFFER_DEFALT_SIZE 1024
 class Buffer
@@ -170,4 +173,48 @@ public:
 		_writer_idx = _read_idx = 0;
 	}
 
+};
+
+class Socket
+{
+private:
+	int _sockFd;
+public:
+	Socket():_sockFd(-1){}
+	Socket(int fd):_sockFd(fd){}
+public:
+	int Fd() {return _sockFd;}
+	// 创建套接字
+	bool Create()
+	{
+		// int socket(int domain, int type, int protocol)
+		// domain 域 : 指定协议. AF_INET IPv4	
+		// type : 套接字的类型，决定了套接字提供的是哪种通信服务.SOCK_STREAM.字节流
+		// protocol : 使用的特定协议.可以设置为0.IPPROTO_TCP和SOCK_STREAM配套
+		// TPPROTO_TCP : 需要引入<arpa/inet.h>  
+		_sockFd = socket(AF_INET,SOCK_STREAM,IPPROTO_TCP);
+		if(_sockFd < 0)
+		{
+			ERR_LOG("创建套接字失败!");
+			return false;
+		}
+		return true;
+	}
+	// 绑定套接字:TODO
+	bool Bind(const std::string& ip,uint64_t port)
+	{
+		struct sockaddr_in addr;
+		addr.sin_family = AF_INET;
+		addr.sin_port = htons(port);
+		addr.sin_addr.s_addr = inet_addr(ip.c_str());
+
+		socklen_t len = sizeof(struct sockaddr_in);
+		int ret = bind(_sockFd,(struct sockaddr*)&addr,len);
+		if(ret < 0)
+		{
+			ERR_LOG("绑定IP地址失败!");
+			return false;
+		}
+		return true;
+	}
 };
