@@ -6,6 +6,8 @@
 #include <string.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
+#include <unistd.h>
+#include <fcntl.h>
 
 #define INF 0
 #define DBG 1
@@ -175,6 +177,7 @@ public:
 
 };
 
+#define MAX_LISTEN 1024
 class Socket
 {
 private:
@@ -215,6 +218,125 @@ public:
 			ERR_LOG("绑定IP地址失败!");
 			return false;
 		}
+		return true;
+	}
+	// 监听
+	bool Listen(int backlog = MAX_LISTEN)
+	{
+		int ret = listen(_sockFd,backlog);
+		if(ret == -1)
+		{
+			ERR_LOG("监听失败!");
+			return false;
+		}
+		return true;
+	}
+	// connect,客户端向服务器端发送连接
+	bool Connect(const std::string& ip,int port)
+	{
+		struct sockaddr_in addr;
+		addr.sin_family = AF_INET;
+		addr.sin_addr.s_addr = inet_addr(ip.c_str());
+		addr.sin_port = htons(port);
+
+		socklen_t len = sizeof(struct sockaddr_in);
+
+		int ret = connect(_sockFd,(struct sockaddr*)&addr,len);
+		if(ret < 0)
+		{
+			ERR_LOG("向服务器连接失败!");
+			return false;
+		}
+		return true;
+	}
+	// accept 服务器获取新连接
+	int Accept()
+	{
+		int newFd = accept(_sockFd,NULL,NULL);
+		if(newFd < 0)
+		{
+			ERR_LOG("获取连接失败!");
+			return -1;
+		}
+		return newFd;
+	}
+	// 接收数据
+	ssize_t Recv(void* buf,size_t n,int flag = 0/*是否为非阻塞*/)
+	{
+		ssize_t ret = recv(_sockFd/*?*/,buf,n,flag);
+		if(ret <= 0)
+		{
+			if(errno == EAGAIN || errno == EINTR) {return 0;}
+			ERR_LOG("读取数据失败!");
+			return -1;
+		}
+
+		return ret;
+	}
+	// 非阻塞读取
+	ssize_t NonBlockRecv(void* buf,size_t n)
+	{
+		return Recv(buf,n,MSG_DONTWAIT/*表示非阻塞*/);
+	}
+	// 发送数据
+	ssize_t Send(const void* buf,size_t n,int flag =0)
+	{
+		ssize_t ret = send(_sockFd,buf,n,flag);
+		if(ret <=0)
+		{
+			if(errno == EAGAIN || errno == EINTR){return 0;}
+			ERR_LOG("数据读取失败!");
+		}
+		return ret;
+	}
+	ssize_t NonBlockSend(const void* buf,size_t n)
+	{
+		return Send(buf,n,MSG_DONTWAIT);
+	}
+	// 关闭套接字
+	void Close()
+	{
+		if(_sockFd != -1)
+		{
+			close(_sockFd);
+			_sockFd = -1;
+		}
+	}
+	// 设置套接字为非阻塞情况
+	void NonBlock()
+	{
+		int falg = fcntl(_sockFd,F_GETFL,0);
+		fcntl(_sockFd,F_SETFL,falg | O_NONBLOCK);
+	}
+	// 设置地址重用
+	void ReuseAddress()
+	{
+		int val = 1;
+		setsockopt(_sockFd,SOL_SOCKET,SO_REUSEADDR,(void*)&val,sizeof(int));
+		val = 1;
+		setsockopt(_sockFd,SOL_SOCKET,SO_REUSEADDR,(void*)&val,sizeof(int));
+	}
+	// 为了创建简单来创建提供创建服务端和客户端的接口
+	bool CreateServer(uint16_t port,const std::string&ip = "0.0.0.0",bool block_falg = false)
+	{
+		// 1.创建套接字
+		if(Create() == false) {return false;}
+		// 2.设置非阻塞
+		if(block_falg == true) {NonBlock();}
+		// 3.绑定套接字
+		if(Bind(ip,port) == false) {return false;}
+		// 4.开始监听
+		if(Listen() == false) {return true;}
+		// 5.启动地址重用
+		ReuseAddress();
+		return true;
+	}
+	bool CreateClient(uint16_t port,const std::string&ip)
+	{
+		// 1.获取套接字
+		if(Create() == false) return false;
+		// 2.向服务器请求连接
+		if(Connect(ip,port) == false) return false;
 		return true;
 	}
 };
