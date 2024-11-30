@@ -8,6 +8,8 @@
 #include <arpa/inet.h>
 #include <unistd.h>
 #include <fcntl.h>
+#include <functional>
+#include <sys/epoll.h>
 
 #define INF 0
 #define DBG 1
@@ -338,5 +340,102 @@ public:
 		// 2.向服务器请求连接
 		if(Connect(ip,port) == false) return false;
 		return true;
+	}
+};
+
+class Channel
+{
+private:
+	int _fd;
+	uint32_t _events;	// 当前需要监控的事件
+	uint32_t _revents;	// 当前连接触发的事件
+	using EventCallback = std::function<void()>;
+	EventCallback _read_callback;	// 可读事件被触发的函数
+	EventCallback _write_callback;	// 可写事件被触发的函数
+	EventCallback _error_callback;	// 错误事件被触发的函数
+	EventCallback _close_callback;	// 连接断开事件被触发的函数
+	EventCallback _event_callback;	// 任意事件被触发的函数
+public:
+	// 对描述符事件管理类
+	Channel(int fd):_fd(fd),_events(0),_revents(0){}
+	int Fd(){return _fd;}
+	// 设置就绪的事件
+	void SetREvents(uint32_t evnets){_revents = evnets;}
+	void SetReadCallback(const EventCallback& cb){_read_callback = cb;}
+	void SetWriteCallback(const EventCallback& cb){_write_callback = cb;}
+	void SetErrorCallback(const EventCallback& cb){_error_callback = cb;}
+	void SetCloseCallback(const EventCallback& cb){_close_callback = cb;}
+	void SetEventCallback(const EventCallback& cb){_event_callback = cb;}
+	// 当前是否监控了可读
+	bool ReadAble()
+	{
+		return (_events & EPOLLIN);
+	}
+	// 当前是否监控了可写
+	bool WriteAble()
+	{
+		return (_events & EPOLLOUT);
+	}
+	// 启动读事件监控
+	void EnableRead()
+	{
+		// 后续会添加到Eventloop的事件监控中! epollctl设置
+		_events |= EPOLLIN;
+	}
+	// 启动写事件监控
+	void EnableWrite()
+	{
+		_events |= EPOLLOUT;
+	}
+	// 关闭读事件监控
+	void DisableRead()
+	{
+		_events &= ~EPOLLIN;
+	}
+	// 关闭写事件监控
+	void DisableWrite()
+	{
+		_events &= ~EPOLLOUT;
+	}
+	// 关闭所有事件监控
+	void DisableAll()
+	{
+		_events = 0;
+	}
+	// 移除监控
+	void Remove()
+	{
+		// 需要调用EventLoop接口来移除监控;TODO
+	}
+	// 数据处理,一旦连接触发事件就调用这个函数.触发什么事件通过回调函数来设置处理方法
+	void HandleEvent()
+	{
+		// 要求上层缓冲区处理数据
+		if((_revents & EPOLLIN) || (_revents & EPOLLRDHUP)/*对方半关闭的连接*/ || (_revents & EPOLLPRI/*优先带外数据*/))
+		{
+			if(_read_callback) {_read_callback();}
+			// 任意函数在之后
+			if(_event_callback){_event_callback();}
+		}
+
+		// 下面有可能会出错然后释放连接,就不能继续访问了
+		if(_revents & EPOLLOUT)
+		{
+			// 任意函数在之后,刷新活跃度
+			if(_write_callback) {_write_callback();}
+			if(_event_callback){_event_callback();}
+		}
+		else if(_revents & EPOLLERR)
+		{
+			// 任意处理函数再前,因为出错再去访问任意函数就不合适
+			if(_event_callback){_event_callback();}
+			if(_error_callback) {_error_callback();}
+		}
+		else if(_revents & EPOLLHUP)
+		{
+			// 任意处理函数再前,因为出错再去访问任意函数就不合适
+			if(_event_callback){_event_callback();}
+			if(_error_callback) {_error_callback();}
+		}
 	}
 };
