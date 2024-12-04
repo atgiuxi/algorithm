@@ -92,7 +92,6 @@ void PrintfPlus(T& value,Args &&...args)
 
 int main()
 {
-
 	PrintfPlus("hello"," world");
 	return 0;
 }
