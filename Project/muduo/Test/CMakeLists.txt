@@ -3,5 +3,5 @@ project(mudou)
 
 set(CMAKE_BUILD_TYPE Debug)
 
-add_executable(server ConnectionServer.cc )
-add_executable(client ConnectionClient.cc )
+add_executable(server AcceptorServer.cc )
+add_executable(client AcceptorClient.cc )
