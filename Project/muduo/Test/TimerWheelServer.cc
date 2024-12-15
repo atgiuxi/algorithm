@@ -2,7 +2,8 @@
 
 void HandleClose(Channel* channel)
 {
-	std::cout << "close" << channel->Fd() << std::endl;
+
+	DBG_LOG("close %d",channel->Fd());	
 	channel->Remove();
 	delete channel;
 }
@@ -20,13 +21,16 @@ void HandleRead(Channel* channel)
 		return;
 	}
 	channel->EnableWrite();
-	std::cout << buf << std::endl;
+	// std::cout << buf << std::endl;
+	DBG_LOG("%s %d",buf,channel->Fd());	
 }
+
+int n = 0;
 
 void HandleWrite(Channel* channel)
 {
 	int fd = channel->Fd();
-	std::string data= "海蒂和爷爷 " + std::to_string(fd);
+	std::string data= "海蒂和爷爷 " + std::to_string(fd) + " : " + std::to_string(++n);
 
 	int ret = send(fd,data.c_str(),data.size(),0);
 	// 写失败也会释放
@@ -41,46 +45,51 @@ void HandleError(Channel* channel)
 {
 	HandleClose(channel);
 }
-void HandleEvent(Channel* channel)
+void HandleEvent(EventLoop* loop,Channel* channel,uint64_t timerid)
 {
-	std::cout << "事件到来" << std::endl;
+	std::cout << "get event "<< channel->Fd() << std::endl;
+	
+	// 如果有任何事件到来,都要刷新活跃度
+	loop->TimerRefresh(timerid);
 }
 
-void Acceptor(Poller* poller,Channel* listen_channel)
+void Acceptor(EventLoop* loop,Channel* listen_channel)
 {
 	int fd = listen_channel->Fd();
 	int newFd = accept(fd,NULL,NULL);
 	if(newFd < 0){return ;}
-	Channel* channel = new Channel(poller,newFd);
+	Channel* channel = new Channel(loop,newFd);
 
+	uint64_t timerid = rand() % 10000;
 	channel->SetReadCallback(std::bind(HandleRead,channel));
 	channel->SetWriteCallback(std::bind(HandleWrite,channel));
 	channel->SetCloseCallback(std::bind(HandleClose,channel));
 	channel->SetErrorCallback(std::bind(HandleError,channel));
-	channel->SetEventCallback(std::bind(HandleEvent,channel));
+	channel->SetEventCallback(std::bind(HandleEvent,loop,channel,timerid));
+
+	// 非活跃的超时释放,10秒关闭
+	// 注意:定时销毁任务必须在都事件之前EnableRead,因为可能启动都事件监控.立即有事件,但是这是还没有任务!
+	// int timerid = rand() % 10000;
+	loop->TimerAdd(timerid,10,std::bind(HandleClose,channel));
 
 	channel->EnableRead();
 }
 
 int main()
 {
-	Poller poller;
+	srand(time(nullptr));
+	EventLoop loop;
 	// 监听套接字
 	Socket listen_sock;
 	listen_sock.CreateServer(8888);
 	
-	Channel channel(&poller,listen_sock.Fd());
-	channel.SetReadCallback(std::bind(Acceptor,&poller,&channel));
+	Channel channel(&loop,listen_sock.Fd());
+	channel.SetReadCallback(std::bind(Acceptor,&loop,&channel));
 	channel.EnableRead();
 
 	while(1)
 	{
-		std::vector<Channel*> actives;
-		poller.Poll(&actives);
-		for(auto &a : actives)
-		{
-			a->HandleEvent();
-		}
+		loop.Start();	
 	}
 	listen_sock.Close();
 
