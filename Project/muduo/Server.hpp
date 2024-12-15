@@ -862,6 +862,327 @@ public:
 
 };
 
+class Any
+{
+private:
+	class holder 
+	{
+	public:
+		virtual ~holder() {}
+		virtual const std::type_info& type() = 0;
+		virtual holder *clone() = 0;
+	};
+	template<class T>
+	class placeholder: public holder 
+	{
+	public:
+		placeholder(const T &val): _val(val) {}
+		// 获取子类对象保存的数据类型
+		virtual const std::type_info& type() { return typeid(T); }
+		// 针对当前的对象自身，克隆出一个新的子类对象
+		virtual holder *clone() { return new placeholder(_val); }
+	public:
+		T _val;
+	};
+
+	holder *_content;
+public:
+	Any():_content(NULL) {}
+	template<class T>
+	Any(const T &val):_content(new placeholder<T>(val)) {}
+	Any(const Any &other):_content(other._content ? other._content->clone() : NULL) {}
+	~Any() { delete _content; }
+
+	Any &swap(Any &other) 
+	{
+		std::swap(_content, other._content);
+		return *this;
+	}
+
+	// 返回子类对象保存的数据的指针
+	template<class T>
+	T *get() {
+		//想要获取的数据类型，必须和保存的数据类型一致
+		assert(typeid(T) == _content->type());
+		return &((placeholder<T>*)_content)->_val;
+	}
+	//赋值运算符的重载函数
+	template<class T>
+	Any& operator=(const T &val) 
+	{
+		//为val构造一个临时的通用容器，然后与当前容器自身进行指针交换，临时对象释放的时候，原先保存的数据也就被释放
+		Any(val).swap(*this);
+		return *this;
+	}
+	Any& operator=(const Any &other) 
+	{
+		Any(other).swap(*this);
+		return *this;
+	}
+};
+
+class Connection;
+
+typedef enum{
+	DISCONNECTED,	// 连接关闭状态
+	CONNECTING,		// 连接建立成功,待处理状态
+	CONNECTED,		// 连接建立完成,各种设置已完成,可以通信的状态
+	DISCONNECTING	// 待关闭状态
+} ConnStatu;
+
+using PtrConnection = std::shared_ptr<Connection>;
+
+class Connection : public std::enable_shared_from_this<Connection>
+{
+private:
+	uint64_t _conn_id;		// 连接id,和定时器id共用
+	int _sockfd;			// 连接关联的文件描述符
+	bool _enable_inactive_release;	// 连接是否启动非活跃销毁的判断标志,默认是false
+	EventLoop* _loop;		// 连接关联的EventLoop
+	ConnStatu _statu;		// 连接状态
+	Socket _socket;			// 套接字操作管理
+	Channel _channel;		// 连接事件管理
+	Buffer _in_buffer;		// 输入缓冲区
+	Buffer _out_buffer;		// 输出缓冲区
+	Any _context;			// 上下文
+
+	using ConnectedCallback = std::function<void(const PtrConnection&)>;
+	using MessageCallback = std::function<void(const PtrConnection&,Buffer*)>;
+	using ClosedCallback = std::function<void(const PtrConnection&)>;
+	using AnyEventCallback = std::function<void(const PtrConnection&)>;
+
+	ConnectedCallback _connected_callback;
+	MessageCallback _message_callback;
+	ClosedCallback _closed_callback;
+	AnyEventCallback _event_callback;
+	ClosedCallback _server_closed_callback;
+private:
+	// channel 事件的回调函数
+	void HandleRead()
+	{
+		// 1.接收缓冲区
+		char buf[65536];
+		ssize_t ret = _socket.NonBlockRecv(buf,sizeof(buf) -1);
+		if(ret < 0)
+		{
+			// 出错了,但不能直接关闭连接
+			return ShutdownInLoop();
+		}
+
+		// 等于 0 说明没有读取到数据并不是连接断开.-1是连接断开
+		// 将数据放入输入缓冲区.
+		_in_buffer.WriteAndPush(buf,ret);
+
+		// 2.调用message_callback进行业务处理
+		if(_in_buffer.ReadAbleSize() > 0)
+		{
+			// std::enable_shared_from_this<Connection> 中的shared_from_this ,让对象获取一个自身的shared_ptr
+			return _message_callback(shared_from_this(),&_in_buffer);
+		}
+	}
+
+	void HandleWrite()
+	{
+		// _out_buffer 中保存的就是要发送的数据
+		// bug NonBlockRecv
+		ssize_t ret = _socket.NonBlockSend(_out_buffer.ReadPosition(),_out_buffer.ReadAbleSize());
+		if(ret < 0)
+		{
+			// 发送错误关闭连接
+			if(_in_buffer.ReadAbleSize() > 0)
+			{
+				// 要关闭了就要吧缓冲区中的数据读出来
+				_message_callback(shared_from_this(),&_in_buffer);
+			}
+			return Release();	// 实际关闭释放的操作
+		}
+
+		_out_buffer.MoveReadOffset(ret);
+		if(_out_buffer.ReadAbleSize() == 0)	
+		{
+			// 没事数据要发送了,就关闭写事件监控
+			_channel.DisableWrite();
+			// 如果当前连接时待关闭状态,如果有数据就发送完关闭,没有数据直接关闭
+			// bug DISCONNECTED
+			if(_statu == DISCONNECTING) {return Release();}
+		}
+	}
+
+	void HandleClose()
+	{
+		if(_in_buffer.ReadAbleSize() > 0)
+		{
+			_message_callback(shared_from_this(),&_in_buffer);
+		}
+		return Release();
+	}
+
+	void HandleError()
+	{
+		return HandleClose();
+	}
+
+	// 任意时间被触发1.刷新连接的活跃度 2.调用任意时间回调
+	void HandleEvent()
+	{
+		if(_enable_inactive_release == true) {_loop->TimerRefresh(_conn_id);}
+		if(_event_callback) {_event_callback(shared_from_this());}
+	}
+
+	// 获取连接,设置状态(启动读监控,调用回调函数)
+	void EstablishedInLoop()
+	{
+		// 当前状态一定是上层处于半连接状态
+		assert(_statu == CONNECTING);
+
+		// 如果当前函数执行完毕,就处于连接状态
+		_statu = CONNECTED;
+
+		// 读事件监控一旦启动就可能被立即触发.
+		_channel.EnableRead();
+		if(_connected_callback){_connected_callback(shared_from_this());}
+	}
+
+	// 真正释放连接的接口
+	void ReleaseInLoop()
+	{
+		_statu = DISCONNECTED;
+		_channel.Remove();
+		_socket.Close();
+		if(_loop->HasTimer(_conn_id)){CancelInactiveReleaseInLoop();}
+		if(_closed_callback) {_closed_callback(shared_from_this());}
+		if(_server_closed_callback) {_server_closed_callback(shared_from_this());}
+	}
+
+	// 不是实际发送的窗口,而是将数据放到发送缓冲区中,启动可写事件监控
+	void SendInLoop(Buffer& buf)
+	{
+		if(_statu == DISCONNECTED) {return ;}
+		_out_buffer.WriteBufferAndPush(buf);
+		if(_channel.WriteAble() == false)
+		{
+			_channel.EnableWrite();
+		} 
+	}
+
+	void ShutdownInLoop()
+	{
+		_statu = DISCONNECTING; 	// 设置连接为半关闭的状态
+		if(_in_buffer.ReadAbleSize() > 0)
+		{
+			if(_message_callback) {_message_callback(shared_from_this(),&_in_buffer);}
+		}
+
+		// 写入数据的时候出错!没有数据待发送直接关闭
+		if(_out_buffer.ReadAbleSize() > 0)
+		{
+			if(_channel.WriteAble() == false) {_channel.EnableWrite();}
+		}
+		if(_out_buffer.ReadAbleSize() == 0) {Release();}
+	}
+
+	// 启动非活跃连接超时释放规则
+	void EnableInactiveReleaseInLoop(int sec)
+	{
+		_enable_inactive_release = true;
+
+		if(_loop->HasTimer(_conn_id))
+		{
+			return _loop->TimerRefresh(_conn_id);
+		}
+		// 如果不存在定时任务,就新增
+		_loop->TimerAdd(_conn_id,sec,std::bind(&Connection::Release,this));
+	}
+	
+	void CancelInactiveReleaseInLoop()
+	{
+		_enable_inactive_release = false;
+		if(_loop->HasTimer(_conn_id))
+		{
+			_loop->TimerCannel(_conn_id);
+		}
+	}
+
+	void UpgradeInLoop(	const Any &context, 
+						const ConnectedCallback &conn, 
+						const MessageCallback &msg, 
+						const ClosedCallback &closed, 
+						const AnyEventCallback &event) 
+	{
+		_context = context;
+		_connected_callback = conn;
+		_message_callback = msg;
+		_closed_callback = closed;
+		_event_callback = event;
+	}
+public:
+	Connection(EventLoop* loop,uint64_t conn_id,int sockfd)
+		:_conn_id(conn_id)
+		,_sockfd(sockfd)
+		,_enable_inactive_release(false)
+		,_loop(loop)
+		,_statu(CONNECTING)
+		,_socket(_sockfd)
+		,_channel(loop,_sockfd)
+	{
+		_channel.SetCloseCallback(std::bind(&Connection::HandleClose,this));
+		_channel.SetEventCallback(std::bind(&Connection::HandleEvent,this));
+		_channel.SetReadCallback(std::bind(&Connection::HandleRead,this));
+		_channel.SetWriteCallback(std::bind(&Connection::HandleWrite,this));
+		_channel.SetErrorCallback(std::bind(&Connection::HandleError,this));
+	}
+
+	~Connection() {DBG_LOG("RELEASE CONNECTION:%p",this);}
+	int Fd() {return _sockfd;}
+	int Id() {return _conn_id;}
+	bool Connected() {return _statu == CONNECTED;}
+
+	void SetConnectedCallback(const ConnectedCallback& cb) {_connected_callback = cb;}
+	void SetMessageCallback(const MessageCallback& cb) {_message_callback = cb;}
+	void SetClosedCallback(const ClosedCallback& cb) {_closed_callback = cb;}
+	void SetAnyEventCallback(const AnyEventCallback& cb) {_event_callback = cb;}
+	void SetSrvClosedCallback(const ClosedCallback& cb) {_server_closed_callback = cb;}
+	
+	void Established()
+	{
+		_loop->RunInLoop(std::bind(&Connection::EstablishedInLoop,this));
+	}
+
+	void Send(const char* data,size_t len)
+	{
+		Buffer buf;
+		buf.WriteAndPush(data,len);
+		_loop->RunInLoop(std::bind(&Connection::SendInLoop,this,std::move(buf)));
+	}
+
+	void Shutdown()
+	{
+		_loop->RunInLoop(std::bind(&Connection::ShutdownInLoop,this));
+	}
+	
+	void Release()
+	{
+		_loop->QueueInLoop(std::bind(&Connection::ReleaseInLoop,this));
+	}
+
+	void EnableInactiveRelease(int sec)
+	{
+		_loop->RunInLoop(std::bind(&Connection::EnableInactiveReleaseInLoop,this,sec));
+	}
+
+	void CannlInactiveRelease()
+	{
+		_loop->RunInLoop(std::bind(&Connection::CancelInactiveReleaseInLoop,this));
+	}
+
+	void Upgrade(const Any &context, const ConnectedCallback &conn, const MessageCallback &msg, 
+					const ClosedCallback &closed, const AnyEventCallback &event) 
+	{
+		_loop->AssertInLoop();
+		_loop->RunInLoop(std::bind(&Connection::UpgradeInLoop, this, context, conn, msg, closed, event));
+	}
+};
+
 // void Channel::Remove()
 // {
 // 	_poller->RemoveEvent(this);

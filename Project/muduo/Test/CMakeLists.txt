@@ -3,5 +3,5 @@ project(mudou)
 
 set(CMAKE_BUILD_TYPE Debug)
 
-add_executable(server TimerWheelServer.cc )
-add_executable(client TimerWheelClient.cc )
+add_executable(server ConnectionServer.cc )
+add_executable(client ConnectionClient.cc )
