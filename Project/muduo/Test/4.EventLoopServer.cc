@@ -1,4 +1,5 @@
 #include "../Server.hpp"
+#include <iostream>
 
 void HandleClose(Channel* channel)
 {

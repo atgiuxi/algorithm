@@ -3,5 +3,5 @@ project(mudou)
 
 set(CMAKE_BUILD_TYPE Debug)
 
-add_executable(server AcceptorServer.cc )
-add_executable(client AcceptorClient.cc )
+add_executable(server 8.LoopThreadPoolServer.cc )
+add_executable(client 7.LoopThreadClient.cc )
