@@ -3,5 +3,7 @@ project(mudou)
 
 set(CMAKE_BUILD_TYPE Debug)
 
-add_executable(server 8.LoopThreadPoolServer.cc )
-add_executable(client 7.LoopThreadClient.cc )
+add_executable(server 4.TimerWheelServer.cc )
+add_executable(client 4.TimerWheelClient.cc )
+# add_executable(server 9.TcpServer.cc )
+# add_executable(client 9.TcpClient.cc )

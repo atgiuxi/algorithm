@@ -1,4 +1,3 @@
-#include <iostream>
 #include <vector>
 #include <assert.h>
 #include <string>
@@ -16,6 +15,9 @@
 #include <mutex>
 #include <sys/timerfd.h>
 #include <sys/eventfd.h>
+#include <condition_variable>
+#include <time.h>
+#include <signal.h>
 
 #define INF 0
 #define DBG 1
@@ -27,7 +29,11 @@
 	do 							\
 	{							\
 		if(level < LOG_LEVEL) break;										\
-		fprintf(stdout,"[%s : %d]" fmt "\n",__FILE__,__LINE__,##__VA_ARGS__);\
+		time_t t = time(nullptr);\
+		struct tm* ltm = localtime(&t);\
+		char tmp[32] = {0};\
+		strftime(tmp,31,"%H:%M:%S",ltm);\
+		fprintf(stdout,"[%p %s %s : %d]" fmt "\n",(void*)pthread_self(),tmp,__FILE__,__LINE__,##__VA_ARGS__);\
 	}while(0)					
 
 #define DBG_LOG(fmt,...) LOG(DBG,fmt,##__VA_ARGS__)
@@ -442,7 +448,7 @@ public:
 			// 任意函数在之后
 			// if(_event_callback){_event_callback();}
 
-			if(_event_callback){_event_callback();}
+			// if(_event_callback){_event_callback();}
 			if(_read_callback) {_read_callback();}
 		}
 
@@ -454,22 +460,26 @@ public:
 			// if(_write_callback) {_write_callback();}
 			// if(_event_callback){_event_callback();}
 
-			if(_event_callback) {_event_callback();}
+			// if(_event_callback) {_event_callback();}
 			if(_write_callback) {_write_callback();}
 
 		}
 		else if(_revents & EPOLLERR)
 		{
 			// 任意处理函数再前,因为出错再去访问任意函数就不合适
-			if(_event_callback){_event_callback();}
+			// if(_event_callback){_event_callback();}
+
 			if(_error_callback) {_error_callback();}
 		}
 		else if(_revents & EPOLLHUP)
 		{
 			// 任意处理函数再前,因为出错再去访问任意函数就不合适
-			if(_event_callback){_event_callback();}
+			// if(_event_callback){_event_callback();}
 			if(_error_callback) {_error_callback();}
 		}
+
+		// 修改
+		if(_event_callback){_event_callback();}
 	}
 };
 
@@ -1218,6 +1228,163 @@ public:
 	void Listen() {_channel.EnableRead();}
 };
 
+class LoopThread
+{
+private:
+	std::mutex _mutex;
+	std::condition_variable _cond;	
+	EventLoop* _loop;
+	std::thread _thread;
+private:
+	// 实例化 EventLoop对象.唤醒_cond上有可能阻塞的线程，并且开始运行EventLoop模块的功.
+	void ThreadEntry()
+	{
+		EventLoop loop;
+		{
+			std::unique_lock<std::mutex> lock(_mutex);
+			_loop = &loop;
+			_cond.notify_all();
+		}
+		// 所有唤醒的线程都start?
+		loop.Start();
+	}
+public:
+	LoopThread():_loop(nullptr),_thread(std::thread(&LoopThread::ThreadEntry,this)) {}
+	EventLoop* GetLoop()
+	{
+		EventLoop* loop = nullptr;
+		{
+			std::unique_lock<std::mutex> lock(_mutex);
+			_cond.wait(lock,[&](){return _loop != NULL;}); // ? TODO 
+			// Bug bool IsInLoop() { return _thread_id == std::this_thread::get_id();} _thread_id 为0X0
+			loop = _loop;
+		}
+		return loop;
+	}
+};
+
+class LoopThreadPool
+{
+private:
+	int _thread_count;
+	int _next_idx;
+	EventLoop* _baseloop;
+	std::vector<LoopThread*> _threads;
+	std::vector<EventLoop* > _loops;
+public:
+	LoopThreadPool(EventLoop* baseloop):_thread_count(0),_next_idx(0),_baseloop(baseloop){}
+	void SetThreadCount(int count) {_thread_count = count;}
+
+	void Create()
+	{
+		if(_thread_count > 0)
+		{
+			_threads.resize(_thread_count);
+			_loops.resize(_thread_count);
+
+			for(int i = 0;i < _thread_count;i++)
+			{
+				_threads[i] = new LoopThread();
+				_loops[i] = _threads[i]->GetLoop();
+			}
+		}
+	}
+
+	EventLoop* NextLoop()
+	{
+		if(_thread_count == 0)
+		{
+			return _baseloop;
+		}
+
+		_next_idx = (_next_idx + 1) % _thread_count;
+		return _loops[_next_idx];
+	}
+};
+
+class TcpServer
+{
+private:
+	uint64_t _next_id;		// 这是一个自动增长的连接ID
+	int _port;	
+	int _timeout;			// 任务多少秒结束
+	bool _enable_inactive_realease;	// 是否启动了非活跃超时销毁标志
+	EventLoop _baseloop;	// 主线程的EventLoop对象
+	Acceptor _acceptor;		// 这是监听套接字管理对象
+	LoopThreadPool _pool;	// 从属线程EventLoop线程池
+	std::unordered_map<uint64_t,PtrConnection> _conns;	// 保存管理所有连接对应的shared_ptr对象。
+
+	using ConnectedCallback = std::function<void(const PtrConnection&)>;
+	using MessageCallback = std::function<void(const PtrConnection&,Buffer*)>;
+	using ClosedCallback = std::function<void(const PtrConnection&)>;
+	using AnyEventCallback = std::function<void(const PtrConnection&)>;
+
+	using Functor = std::function<void()>;
+
+	ConnectedCallback _connected_callback;
+	MessageCallback _message_callback;
+	ClosedCallback _closed_callback;
+	AnyEventCallback _event_callback;
+private:
+	void RunAfterInLoop(const Functor & task,int delay)
+	{
+		_next_id++;
+		_baseloop.TimerAdd(_next_id,delay,task);
+	}	
+
+	void NewConnection(int fd)
+	{
+		_next_id++;
+		PtrConnection conn(new Connection(_pool.NextLoop(),_next_id,fd));
+		conn->SetMessageCallback(_message_callback);
+		conn->SetClosedCallback(_closed_callback);
+		conn->SetConnectedCallback(_connected_callback);
+		conn->SetAnyEventCallback(_event_callback);
+		conn->SetSrvClosedCallback(std::bind(&TcpServer::RemoveConnection,this,std::placeholders::_1));
+
+		if(_enable_inactive_realease) conn->EnableInactiveRelease(_timeout);
+		conn->Established();
+		_conns.insert(std::make_pair(_next_id,conn));
+	}
+
+	void RemoveConnnetionInLoop(const PtrConnection& conn)
+	{
+		int id = conn->Id();
+		auto it = _conns.find(id);
+		if(it != _conns.end())
+		{
+			_conns.erase(it);
+		}
+	}
+
+	void RemoveConnection(const PtrConnection& conn)
+	{
+		_baseloop.RunInLoop(std::bind(&TcpServer::RemoveConnnetionInLoop,this,conn));
+	}
+public:
+	TcpServer(int port):
+		_port(port),
+		_next_id(0),
+		_enable_inactive_realease(false),
+		_acceptor(&_baseloop,port),
+		_pool(&_baseloop)
+	{
+		_acceptor.SetAcceptCallback(std::bind(&TcpServer::NewConnection,this,std::placeholders::_1));
+		_acceptor.Listen();
+	}
+	void SetThreadCount(int count) { return _pool.SetThreadCount(count); }
+	void SetConnectedCallback(const ConnectedCallback&cb) { _connected_callback = cb; }
+	void SetMessageCallback(const MessageCallback&cb) { _message_callback = cb; }
+	void SetClosedCallback(const ClosedCallback&cb) { _closed_callback = cb; }
+	void SetAnyEventCallback(const AnyEventCallback&cb) { _event_callback = cb; }
+	void EnableInactiveRelease(int timeout) { _timeout = timeout,_enable_inactive_realease = true; }
+	//用于添加一个定时任务
+	void RunAfter(const Functor &task, int delay) {
+		_baseloop.RunInLoop(std::bind(&TcpServer::RunAfterInLoop, this, task, delay));
+	}
+	void Start() { _pool.Create();/*不在构造函数创建，thread_count = 0N*/  _baseloop.Start(); }
+};
+
 // void Channel::Remove()
 // {
 // 	_poller->RemoveEvent(this);
@@ -1245,3 +1412,16 @@ void TimerWheel::TimerCancel(uint64_t id)
 {
 	_loop->RunInLoop(std::bind(&TimerWheel::TimerCancelInLoop,this,id));	
 }
+
+class NetWork
+{
+public:
+	NetWork()
+	{
+		DBG_LOG("SIGPIE INTI");
+		// 断开连接继续Send发送数据，会导致客户端收到信号进程退出，这里忽略
+		signal(SIGPIPE,SIG_IGN);
+	}
+};
+
+static NetWork nw;

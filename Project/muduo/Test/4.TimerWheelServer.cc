@@ -1,4 +1,5 @@
 #include "../Server.hpp"
+#include <iostream>
 
 void HandleClose(Channel* channel)
 {
@@ -23,6 +24,7 @@ void HandleRead(Channel* channel)
 	channel->EnableWrite();
 	// std::cout << buf << std::endl;
 	DBG_LOG("%s %d",buf,channel->Fd());	
+	
 }
 
 int n = 0;

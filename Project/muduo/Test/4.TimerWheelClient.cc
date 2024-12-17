@@ -10,7 +10,7 @@ int main()
 		DBG_LOG("创建客户端失败!");
 		return -1;
 	}
-	for(;;)
+	for(int i = 0;i < 5;i++)
 	{
 		std::string str = "echo : hello world";
 		client_sock.Send(str.c_str(),str.size());
@@ -20,6 +20,7 @@ int main()
 		DBG_LOG("%s",buf);
 		sleep(1);
 	}
+	while(1){}
 
 	return 0;
 }
