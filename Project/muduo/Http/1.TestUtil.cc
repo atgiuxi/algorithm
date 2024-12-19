@@ -32,8 +32,23 @@ void TestWriteFile()
 	Util::WriteFile(filename,src);
 }
 
+void Test()
+{
+	string url = "http://098ac ++ ";
+	string res = Util::UrlEncode(url,true);
+	cout << res << endl;
+
+	cout << Util::UrlDecode(res,true) << endl;
+
+	cout << Util::StatuDesc(404) << endl;
+
+	cout << Util::IsDirectory("../build") << endl;
+	cout << Util::IsRegular("a.txt") << endl;
+	cout << Util::ValidPath("/../login.html") << endl;
+}
+
 int main()
 {
-	TestWriteFile();
+	Test();
 	return 0;
 }
